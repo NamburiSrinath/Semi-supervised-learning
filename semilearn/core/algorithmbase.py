@@ -359,6 +359,12 @@ class AlgorithmBase:
                 self.out_dict, self.log_dict = self.train_step(
                     **self.process_batch(**data_lb, **data_ulb)
                 )
+                self.print_fn(self.epoch, self.it, self.epochs)
+                self.print_fn("Output dict")
+                self.print_fn(self.out_dict)
+                self.print_fn(self.out_dict['feat']['x_lb'].shape)
+                self.print_fn(self.out_dict['feat']['x_ulb_s'].shape)
+                self.print_fn(self.out_dict['feat']['x_ulb_w'].shape)
                 self.call_hook("after_train_step")
                 self.it += 1
 

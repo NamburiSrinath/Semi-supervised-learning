@@ -86,6 +86,10 @@ def get_config():
         "--ema_m", type=float, default=0.999, help="ema momentum for eval_model"
     )
     parser.add_argument("--ulb_loss_ratio", type=float, default=1.0)
+    parser.add_argument("--use_g_opt", default=False, type=str2bool)
+    parser.add_argument("--ratio_g_opt", type=float, default=0.5)
+    parser.add_argument("--g_opt_epochs", type=int, default=10)
+    parser.add_argument("--g_opt_val_size", type=float, default=0.2)
 
     """
     Optimizer configurations
@@ -396,6 +400,7 @@ def main_worker(gpu, ngpus_per_node, args):
     for key, item in model.results_dict.items():
         logger.info(f"Model result - {key} : {item}")
 
+    # Srinath: Not going to finetune code! 
     if hasattr(model, "finetune"):
         logger.info("Finetune stage")
         model.finetune()

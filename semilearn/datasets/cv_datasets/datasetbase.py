@@ -29,6 +29,7 @@ class BasicDataset(Dataset):
                  is_ulb=False,
                  strong_transform=None,
                  onehot=False,
+                 use_g_opt=False,
                  *args, 
                  **kwargs):
         """
@@ -49,6 +50,7 @@ class BasicDataset(Dataset):
         self.num_classes = num_classes
         self.is_ulb = is_ulb
         self.onehot = onehot
+        self.use_g_opt = use_g_opt
 
         self.transform = transform
         self.strong_transform = strong_transform
@@ -88,6 +90,8 @@ class BasicDataset(Dataset):
                 if self.alg == 'defixmatch' and self.strong_transform is not None:
                     # NOTE Strong augmentation on the labelled for DeFixMatch
                     return {'idx_lb': idx, 'x_lb': img_w, 'x_lb_s': self.strong_transform(img), 'y_lb': target} 
+                if self.use_g_opt:
+                    return {'idx_lb_g': idx, 'x_lb_g': img_w, 'y_lb_g': target}
                 else:
                     return {'idx_lb': idx, 'x_lb': img_w, 'y_lb': target}
             else:
@@ -108,7 +112,10 @@ class BasicDataset(Dataset):
                 elif self.alg == 'comatch':
                     return {'idx_ulb': idx, 'x_ulb_w': img_w, 'x_ulb_s_0': self.strong_transform(img), 'x_ulb_s_1':self.strong_transform(img)} 
                 else:
-                    return {'idx_ulb': idx, 'x_ulb_w': img_w, 'x_ulb_s': self.strong_transform(img)} 
+                    # Srinath: here try to add 'y_ulb': target!
+                    # Original
+                    # return {'idx_ulb': idx, 'x_ulb_w': img_w, 'x_ulb_s': self.strong_transform(img)}
+                    return {'idx_ulb': idx, 'x_ulb_w': img_w, 'x_ulb_s': self.strong_transform(img), 'y_ulb': target} 
 
 
     def __len__(self):

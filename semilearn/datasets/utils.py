@@ -36,19 +36,30 @@ def split_ssl_data(args, data, targets, num_classes,
         include_lb_to_ulb: If True, labeled data is also included in unlabeled data
     """
     data, targets = np.array(data), np.array(targets)
-    lb_idx, ulb_idx = sample_labeled_unlabeled_data(args, data, targets, num_classes, 
+    if args.use_g_opt:
+        lb_idx, lb_g_opt_train_idx, lb_g_opt_val_idx, ulb_idx = sample_labeled_unlabeled_data(args, data, targets, num_classes, 
+                                                    lb_num_labels, ulb_num_labels,
+                                                    lb_imbalance_ratio, ulb_imbalance_ratio, load_exist=False)
+    else:
+        lb_idx, ulb_idx = sample_labeled_unlabeled_data(args, data, targets, num_classes, 
                                                     lb_num_labels, ulb_num_labels,
                                                     lb_imbalance_ratio, ulb_imbalance_ratio, load_exist=False)
     
     # manually set lb_idx and ulb_idx, do not use except for debug
+    # Srinath: So, this is not needed to set for validation split-up
     if lb_index is not None:
         lb_idx = lb_index
     if ulb_index is not None:
         ulb_idx = ulb_index
 
     if include_lb_to_ulb:
-        ulb_idx = np.concatenate([lb_idx, ulb_idx], axis=0)
-    
+        if args.use_g_opt:
+            ulb_idx = np.concatenate([lb_idx, lb_g_opt_train_idx, lb_g_opt_val_idx, ulb_idx], axis=0)
+        else:
+            ulb_idx = np.concatenate([lb_idx, ulb_idx], axis=0)
+
+    if args.use_g_opt:
+        return data[lb_idx], targets[lb_idx], data[lb_g_opt_train_idx], targets[lb_g_opt_train_idx], data[lb_g_opt_val_idx], targets[lb_g_opt_val_idx], data[ulb_idx], targets[ulb_idx]
     return data[lb_idx], targets[lb_idx], data[ulb_idx], targets[ulb_idx]
 
 
@@ -95,11 +106,28 @@ def sample_labeled_unlabeled_data(args, data, target, num_classes,
 
     lb_idx = []
     ulb_idx = []
-    
+    lb_g_opt_train_idx = []
+    lb_g_opt_val_idx = []
+
     for c in range(num_classes):
         idx = np.where(target == c)[0]
         np.random.shuffle(idx)
-        lb_idx.extend(idx[:lb_samples_per_class[c]])
+        # If using g_opt, divide the labeled data to 3 parts
+        # One is used for supervised training, 
+        # One is used for training g_hat, 
+        # One is used for validating g_hat
+        if args.use_g_opt:
+            no_lb_g_opt_train = int(lb_samples_per_class[c] * args.ratio_g_opt * (1-args.g_opt_val_size))
+            no_lb_g_opt_val = int(lb_samples_per_class[c] * args.ratio_g_opt * args.g_opt_val_size)
+            # print(no_lb_g_opt_train, no_lb_g_opt_val)
+            # print(idx[:no_lb_g_opt_train])
+            # print(idx[no_lb_g_opt_train:no_lb_g_opt_train+no_lb_g_opt_val])
+            # print(idx[no_lb_g_opt_train+no_lb_g_opt_val:(lb_samples_per_class[c])])
+            lb_g_opt_train_idx.extend(idx[:no_lb_g_opt_train])
+            lb_g_opt_val_idx.extend(idx[no_lb_g_opt_train:no_lb_g_opt_train+no_lb_g_opt_val])
+            lb_idx.extend(idx[no_lb_g_opt_train+no_lb_g_opt_val:(lb_samples_per_class[c])])
+        else:
+            lb_idx.extend(idx[:lb_samples_per_class[c]])
         if ulb_samples_per_class is None:
             ulb_idx.extend(idx[lb_samples_per_class[c]:])
         else:
@@ -112,7 +140,17 @@ def sample_labeled_unlabeled_data(args, data, target, num_classes,
 
     np.save(lb_dump_path, lb_idx)
     np.save(ulb_dump_path, ulb_idx)
-    
+
+    if args.use_g_opt:
+        if isinstance(lb_g_opt_train_idx, list):
+            lb_g_opt_train_idx = np.asarray(lb_g_opt_train_idx)
+        if isinstance(lb_g_opt_val_idx, list):
+            lb_g_opt_val_idx = np.asarray(lb_g_opt_val_idx)
+        lb_g_train_dump_path = os.path.join(dump_dir, f'lb_idx_g_opt_train{int(args.num_labels * args.ratio_g_opt * (1-args.g_opt_val_size))}_{args.lb_imb_ratio}_seed{args.seed}_idx.npy')
+        lb_g_val_dump_path = os.path.join(dump_dir, f'lb_idx_g_opt_val{int(args.num_labels * args.ratio_g_opt * args.g_opt_val_size)}_{args.lb_imb_ratio}_seed{args.seed}_idx.npy')
+        np.save(lb_g_train_dump_path, lb_g_opt_train_idx)
+        np.save(lb_g_val_dump_path, lb_g_opt_val_idx)
+        return lb_idx, lb_g_opt_train_idx, lb_g_opt_val_idx, ulb_idx
     return lb_idx, ulb_idx
 
 

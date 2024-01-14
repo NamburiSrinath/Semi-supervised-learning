@@ -6,10 +6,15 @@ load_path: ./saved_models/classic_cv/fixmatch_cifar10_4000_0/latest_model.pth
 overwrite: True
 use_tensorboard: True
 use_wandb: False
-epoch: 1024
-num_train_iter: 1048576
-num_eval_iter: 5120
-num_log_iter: 256
+epoch: 10
+num_train_iter: 20
+num_eval_iter: 10
+num_log_iter: 10
+# Added flag, whether to split data and use that for g_opt or not!
+use_g_opt: True
+ratio_g_opt: 0.5
+g_opt_val_size: 0.2
+g_opt_epochs: 20
 num_labels: 4000
 batch_size: 64
 eval_batch_size: 256
@@ -39,7 +44,7 @@ num_workers: 1
 seed: 0
 world_size: 1
 rank: 0
-multiprocessing_distributed: True
+multiprocessing_distributed: False
 dist_url: tcp://127.0.0.1:10008
 dist_backend: nccl
 gpu: None

@@ -53,8 +53,15 @@ def get_cifar(args, alg, name, num_labels, num_classes, data_dir='./data', inclu
         transforms.ToTensor(),
         transforms.Normalize(mean[name], std[name],)
     ])
-
-    lb_data, lb_targets, ulb_data, ulb_targets = split_ssl_data(args, data, targets, num_classes, 
+    if args.use_g_opt:
+        lb_data, lb_targets, lb_g_train_data, lb_g_train_targets, lb_g_val_data, lb_g_val_targets, ulb_data, ulb_targets = split_ssl_data(args, data, targets, num_classes, 
+                                                                lb_num_labels=num_labels,
+                                                                ulb_num_labels=args.ulb_num_labels,
+                                                                lb_imbalance_ratio=args.lb_imb_ratio,
+                                                                ulb_imbalance_ratio=args.ulb_imb_ratio,
+                                                                include_lb_to_ulb=include_lb_to_ulb)
+    else:
+        lb_data, lb_targets, ulb_data, ulb_targets = split_ssl_data(args, data, targets, num_classes, 
                                                                 lb_num_labels=num_labels,
                                                                 ulb_num_labels=args.ulb_num_labels,
                                                                 lb_imbalance_ratio=args.lb_imb_ratio,
@@ -63,10 +70,19 @@ def get_cifar(args, alg, name, num_labels, num_classes, data_dir='./data', inclu
     
     lb_count = [0 for _ in range(num_classes)]
     ulb_count = [0 for _ in range(num_classes)]
+    lb_g_train_count = [0 for _ in range(num_classes)]
+    lb_g_val_count = [0 for _ in range(num_classes)]
+
     for c in lb_targets:
         lb_count[c] += 1
     for c in ulb_targets:
         ulb_count[c] += 1
+    if args.use_g_opt:
+        for c in lb_g_train_targets:
+            lb_g_train_count[c] += 1
+        for c in lb_g_val_targets:
+            lb_g_val_count[c] += 1
+        print("lb_g train and val count: {}, {}".format(lb_g_train_count, lb_g_val_count))
     print("lb count: {}".format(lb_count))
     print("ulb count: {}".format(ulb_count))
     # lb_count = lb_count / lb_count.sum()
@@ -100,12 +116,17 @@ def get_cifar(args, alg, name, num_labels, num_classes, data_dir='./data', inclu
     #     json.dump(out, w)
 
     lb_dset = BasicDataset(alg, lb_data, lb_targets, num_classes, transform_weak, False, transform_strong, False)
-
+    if args.use_g_opt:
+        lb_g_train_dset = BasicDataset(alg, lb_g_train_data, lb_g_train_targets, num_classes, transform_weak, False, transform_strong, False, use_g_opt=args.use_g_opt)
+        lb_g_val_dset = BasicDataset(alg, lb_g_val_data, lb_g_val_targets, num_classes, transform_weak, False, transform_strong, False, use_g_opt=args.use_g_opt)
+    # Srinath: Try to get y_ulb from here
     ulb_dset = BasicDataset(alg, ulb_data, ulb_targets, num_classes, transform_weak, True, transform_strong, False)
 
     dset = getattr(torchvision.datasets, name.upper())
     dset = dset(data_dir, train=False, download=True)
     test_data, test_targets = dset.data, dset.targets
     eval_dset = BasicDataset(alg, test_data, test_targets, num_classes, transform_val, False, None, False)
-
-    return lb_dset, ulb_dset, eval_dset
+    
+    if args.use_g_opt:
+        return lb_dset, lb_g_train_dset, lb_g_val_dset, ulb_dset, eval_dset
+    return lb_dset, None, None, ulb_dset, eval_dset

@@ -45,10 +45,18 @@ class FixMatch(AlgorithmBase):
         self.register_hook(FixedThresholdingHook(), "MaskingHook")
         super().set_hooks()
 
-    def train_step(self, x_lb, y_lb, x_ulb_w, x_ulb_s):
+    def train_step(self, x_lb, y_lb, x_ulb_w, x_ulb_s, y_ulb):
         num_lb = y_lb.shape[0]
+        # self.print_fn("-"*20)
+        # self.print_fn(f"x_lb, y_lb, device: {x_lb.shape}, {y_lb.shape}, {x_lb.device}")
+        # self.print_fn(f"x_ulb_s, x_ulb_w, y_ulb: {x_ulb_s.shape}, {x_ulb_w.shape}, {y_ulb.shape}")
+        # self.print_fn(f"y_lb, y_ulb: {y_lb[:10]}, {y_ulb[:10]}")
+        dictionary = {}
 
         # inference and calculate sup/unsup losses
+        # Srinath: Pass the labeled input, weak augmented and strong augmented
+        # unlabeled input to the model and get respective logits! 
+        # Default use_cat is true!, logic stays the same 
         with self.amp_cm():
             if self.use_cat:
                 inputs = torch.cat((x_lb, x_ulb_w, x_ulb_s))
@@ -68,27 +76,58 @@ class FixMatch(AlgorithmBase):
                     outs_x_ulb_w = self.model(x_ulb_w)
                     logits_x_ulb_w = outs_x_ulb_w['logits']
                     feats_x_ulb_w = outs_x_ulb_w['feat']
+            # Srinath: Have a flag which says whether xlb2 is needed or not
             feat_dict = {'x_lb':feats_x_lb, 'x_ulb_w':feats_x_ulb_w, 'x_ulb_s':feats_x_ulb_s}
 
             sup_loss = self.ce_loss(logits_x_lb, y_lb, reduction='mean')
             
+            # Srinath: This is computing softmax of logits for weak augmented unlabeled data!
             # probs_x_ulb_w = torch.softmax(logits_x_ulb_w, dim=-1)
+            # Shape: batch_size x num_classes
             probs_x_ulb_w = self.compute_prob(logits_x_ulb_w.detach())
             
             # if distribution alignment hook is registered, call it 
             # this is implemented for imbalanced algorithm - CReST
             if self.registered_hook("DistAlignHook"):
                 probs_x_ulb_w = self.call_hook("dist_align", "DistAlignHook", probs_x_ulb=probs_x_ulb_w.detach())
+            
+            # Srinath: If the flag is enabled, learn new g and change these probs_x_ulb_w. 
+            # Learn this g using the left out validation data
+            # self.learn_new_g(x_lb2, self.model) - Future: Use unlabeled data to learn this new g!
+            # self.compute_prob(logits_x_ulb, flag)
+            if self.args.use_g_opt:
+                # Learn the new function on validation data
+                # Use entire data, train for every minibatch (maybe train it for 100 epochs)
+                # Have Weight decay, shuffle for model 
+                # Get the best g from this 100 epochs, so use training-1500, validation-500
+                
+                self.learn_new_g()
+                print("Training g done, in Fixmatch---")
+                self.verify_parameters()
+                # Pass the features learned to the network to get logits
+                # Shape: batch_size x 2. DOUBT: How can this generate pseudo labels that's num_class 
+                logits_x_ulb_w = self.best_nn(feats_x_ulb_w)
+                probs_x_g_ulb_w = self.compute_prob(logits_x_ulb_w)
 
             # compute mask
-            mask = self.call_hook("masking", "MaskingHook", logits_x_ulb=probs_x_ulb_w, softmax_x_ulb=False)
+            # Srinath: Use g_probs here
+            mask, max_probs = self.call_hook("masking", "MaskingHook", logits_x_ulb=probs_x_g_ulb_w, softmax_x_ulb=False)
 
+            # self.print_fn("Weak aug unlabeled probs")
+            # self.print_fn(probs_x_ulb_w.shape)
+            # self.print_fn(probs_x_ulb_w)
+            
             # generate unlabeled targets using pseudo label hook
+            # Srinath: Use probs_x_ulb_w coming from h!
             pseudo_label = self.call_hook("gen_ulb_targets", "PseudoLabelingHook", 
-                                          logits=probs_x_ulb_w,
-                                          use_hard_label=self.use_hard_label,
-                                          T=self.T,
-                                          softmax=False)
+                                        logits=probs_x_ulb_w,
+                                        use_hard_label=self.use_hard_label,
+                                        T=self.T,
+                                        softmax=False)
+            
+            # self.print_fn("Pseudo Labels")
+            # self.print_fn(pseudo_label.shape)
+            # self.print_fn(pseudo_label)
 
             unsup_loss = self.consistency_loss(logits_x_ulb_s,
                                                pseudo_label,
@@ -102,7 +141,11 @@ class FixMatch(AlgorithmBase):
                                          unsup_loss=unsup_loss.item(), 
                                          total_loss=total_loss.item(), 
                                          util_ratio=mask.float().mean().item())
-        return out_dict, log_dict
+        dictionary['y_pred'] = pseudo_label
+        dictionary['y_true'] = y_ulb
+        dictionary['mask'] = mask
+        dictionary['confidence'] = max_probs
+        return out_dict, log_dict, dictionary
         
 
     @staticmethod

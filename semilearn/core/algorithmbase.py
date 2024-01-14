@@ -5,10 +5,14 @@ import contextlib
 import os
 from collections import OrderedDict
 from inspect import signature
+from semilearn.core.smallNN import SmallNN
 
 import numpy as np
+import pandas as pd
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
+import torch.optim as optim
 from semilearn.core.criterions import CELoss, ConsistencyLoss
 from semilearn.core.hooks import (
     AimHook,
@@ -39,7 +43,6 @@ from sklearn.metrics import (
     recall_score,
 )
 from torch.cuda.amp import GradScaler, autocast
-
 
 class AlgorithmBase:
     """
@@ -111,6 +114,7 @@ class AlgorithmBase:
         # build supervised loss and unsupervised loss
         self.ce_loss = CELoss()
         self.consistency_loss = ConsistencyLoss()
+        self.g_opt_loss = nn.MSELoss()
 
         # other arguments specific to the algorithm
         # self.init(**kwargs)
@@ -150,11 +154,13 @@ class AlgorithmBase:
             else 0
         )
         self.args.lb_dest_len = len(dataset_dict["train_lb"])
+        self.print_fn("Note: labeled data number changes depending on use_g_opt flag")
         self.print_fn(
             "unlabeled data number: {}, labeled data number {}".format(
                 self.args.ulb_dest_len, self.args.lb_dest_len
             )
         )
+        self.print_fn("Note: The batch size for labeled and unlabeled depends on uratio parameter!")
         if self.rank == 0 and self.distributed:
             torch.distributed.barrier()
         return dataset_dict
@@ -177,6 +183,36 @@ class AlgorithmBase:
             num_epochs=self.epochs,
             num_workers=self.args.num_workers,
             distributed=self.distributed,
+        )
+        if self.args.use_g_opt:
+            loader_dict["train_lb_g"] = get_data_loader(
+            self.args,
+            self.dataset_dict["train_lb_g"],
+            self.args.batch_size,
+            # Make sure data sampler is None for g_opt data
+            data_sampler=None,
+            # data_sampler=self.args.train_sampler,
+            num_iters=self.num_train_iter,
+            num_epochs=self.epochs,
+            num_workers=self.args.num_workers,
+            distributed=self.distributed,
+            # Incase we want all the samples!
+            # drop_last=False
+            )
+
+            loader_dict["val_lb_g"] = get_data_loader(
+            self.args,
+            self.dataset_dict["val_lb_g"],
+            self.args.batch_size,
+            # Make sure data sampler is None for g_opt data
+            data_sampler=None,
+            # data_sampler=self.args.train_sampler,
+            num_iters=self.num_train_iter,
+            num_epochs=self.epochs,
+            num_workers=self.args.num_workers,
+            distributed=self.distributed,
+            # Incase we want all the samples!
+            # drop_last=False
         )
 
         loader_dict["train_ulb"] = get_data_loader(
@@ -276,7 +312,6 @@ class AlgorithmBase:
         if input_args is None:
             input_args = signature(self.train_step).parameters
             input_args = list(input_args.keys())
-
         input_dict = {}
 
         for arg, var in kwargs.items():
@@ -321,6 +356,75 @@ class AlgorithmBase:
     def compute_prob(self, logits):
         return torch.softmax(logits, dim=-1)
 
+    def verify_parameters(self):
+        print("---Small NN---")
+        for name, param in self.small_nn.named_parameters():
+            if param.requires_grad:
+                print(name, param.data)
+        print("---Best NN---")
+        for name, param in self.best_nn.named_parameters():
+            if param.requires_grad:
+                print(name, param.data)
+    
+    def extract_feats_labels_g_opt(self, key):
+        # TODO: Optimize this part somehow!
+        dict_lb_g = {'feat': [], 'labels': []}
+        for data_lb_g in self.loader_dict[key]:
+            x_lb_g, y_lb_g = data_lb_g['x_lb_g'], data_lb_g['y_lb_g']
+            # Use feat as input, logits and y_lb_g to create an output label 
+            # keys are feat (batch_sizex128) and logits(batxh_sizexnum_classes)
+            x_lb_g_out = self.model(x_lb_g)
+            probs_x_lb_g = self.compute_prob(x_lb_g_out['logits'])
+            max_probs, y_pred = torch.max(probs_x_lb_g, dim=-1)
+            # batch_size
+            labels = torch.tensor([1 if pred == true_label else 0 for pred, true_label in zip(y_pred, y_lb_g)])
+            # batch_size x 2
+            dict_lb_g['feat'].append(x_lb_g_out['feat'])
+            dict_lb_g['labels'].append(labels)
+        return dict_lb_g
+
+    def learn_new_g(self):
+        best_loss = float('inf')
+        # use val_lb_g to save best g!
+        train_dict_lb_g = self.extract_feats_labels_g_opt("train_lb_g")
+        val_dict_lb_g = self.extract_feats_labels_g_opt("val_lb_g")
+
+        self.print_fn("Training g started---")
+        self.verify_parameters()
+
+        for g_opt_epoch in range(self.args.g_opt_epochs):
+            if g_opt_epoch % 10 == 0:
+                print(f"In Eval, {g_opt_epoch}")
+                eval_loss = 0
+                for feat, labels in zip(val_dict_lb_g['feat'], val_dict_lb_g['labels']):
+                    self.small_nn.to(feat.device)
+                    logits = self.small_nn(feat)
+                    loss = self.g_opt_loss(logits, labels.to(logits.device).float())
+                    eval_loss += loss.item()
+                print(f"Best and eval loss are {best_loss}, {eval_loss}")
+                if eval_loss < best_loss:
+                    print("Found better g")
+                    best_loss = eval_loss
+                    self.best_nn = self.small_nn
+            else:
+                for feat, labels in zip(train_dict_lb_g['feat'], train_dict_lb_g['labels']):
+                    # Crappy way of moving the model and data to GPU depending on input status
+                    self.small_nn.to(feat.device)
+                    # print(feat.device)
+                    logits = self.small_nn(feat)
+                    # print(labels.shape)
+                    # print(logits.shape)
+                    # Crappy way to push the labels according to device the logits are present
+                    loss = self.g_opt_loss(logits, labels.to(logits.device).float())
+                    # print(loss)
+                    self.optimizer.zero_grad()
+                    # retain_graph not True is throwing a runtime error, fix it as this is suboptimal!
+                    loss.backward(retain_graph=True)
+                    self.optimizer.step()
+        self.print_fn("Training g done, in end of function---")
+        self.verify_parameters()
+        
+
     def train_step(self, idx_lb, x_lb, y_lb, idx_ulb, x_ulb_w, x_ulb_s):
         """
         train_step specific to each algorithm
@@ -347,6 +451,16 @@ class AlgorithmBase:
                 break
 
             self.call_hook("before_train_epoch")
+            if self.args.use_g_opt:
+                # Srinath: Learn this g function for every epoch
+                input_size = 128
+                hidden_size = 20
+                output_size = 1
+                lr = 0.001
+                weight_decay = 0.001
+                self.small_nn = SmallNN(input_size, hidden_size, output_size)
+                self.best_nn = SmallNN(input_size, hidden_size, output_size)
+                self.optimizer = optim.Adam(self.small_nn.parameters(), lr=lr, weight_decay=weight_decay)
 
             for data_lb, data_ulb in zip(
                 self.loader_dict["train_lb"], self.loader_dict["train_ulb"]
@@ -356,15 +470,19 @@ class AlgorithmBase:
                     break
 
                 self.call_hook("before_train_step")
-                self.out_dict, self.log_dict = self.train_step(
+                self.out_dict, self.log_dict, dictionary = self.train_step(
                     **self.process_batch(**data_lb, **data_ulb)
                 )
-                self.print_fn(self.epoch, self.it, self.epochs)
-                self.print_fn("Output dict")
-                self.print_fn(self.out_dict)
-                self.print_fn(self.out_dict['feat']['x_lb'].shape)
-                self.print_fn(self.out_dict['feat']['x_ulb_s'].shape)
-                self.print_fn(self.out_dict['feat']['x_ulb_w'].shape)
+                # print(self.out_dict["feat"]["x_lb"].shape, 
+                #                 self.out_dict["feat"]["x_ulb_w"].shape, 
+                #                 self.out_dict["feat"]["x_ulb_s"].shape) 
+                # self.print_fn(self.log_dict)
+                if self.it == 0 or (self.it+1) % 10 == 0:
+                    data_cpu = {key: value.cpu().numpy() if torch.is_tensor(value) else value for key, value in dictionary.items()}
+                    df = pd.DataFrame(data_cpu)
+                    self.print_fn(f'Epoch-{self.epoch}, Iteration-{self.it} done, CSV saved---')
+                    df.to_csv(f'logs/epoch{self.epoch}_iter{self.it}.csv')
+
                 self.call_hook("after_train_step")
                 self.it += 1
 

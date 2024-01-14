@@ -54,7 +54,9 @@ class FixedThresholdingHook(MaskingHook):
             probs_x_ulb = logits_x_ulb.detach()
         max_probs, _ = torch.max(probs_x_ulb, dim=-1)
         mask = max_probs.ge(algorithm.p_cutoff).to(max_probs.dtype)
-        return mask
+        # Srinath: Returning max_probs as well to plot 
+        # return mask
+        return mask, max_probs
 
 
 # class RampupWeightingHook(MaskingHook):

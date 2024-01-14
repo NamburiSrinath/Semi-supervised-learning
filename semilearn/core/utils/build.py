@@ -85,7 +85,7 @@ def get_dataset(args, algorithm, dataset, num_labels, num_classes, data_dir='./d
         lb_dset, ulb_dset, eval_dset = get_semi_aves(args, algorithm, "semi_aves", train_split='l_train_val', ulb_split='u_train_out', data_dir=data_dir)
         test_dset = None
     elif dataset in ["cifar10", "cifar100"]:
-        lb_dset, ulb_dset, eval_dset = get_cifar(args, algorithm, dataset, num_labels, num_classes, data_dir=data_dir, include_lb_to_ulb=include_lb_to_ulb)
+        lb_dset, lb_g_train_dset, lb_g_val_dset, ulb_dset, eval_dset = get_cifar(args, algorithm, dataset, num_labels, num_classes, data_dir=data_dir, include_lb_to_ulb=include_lb_to_ulb)
         test_dset = None
     elif dataset == 'svhn':
         lb_dset, ulb_dset, eval_dset = get_svhn(args, algorithm, dataset, num_labels, num_classes, data_dir=data_dir, include_lb_to_ulb=include_lb_to_ulb)
@@ -104,7 +104,7 @@ def get_dataset(args, algorithm, dataset, num_labels, num_classes, data_dir='./d
     else:
         return None
     
-    dataset_dict = {'train_lb': lb_dset, 'train_ulb': ulb_dset, 'eval': eval_dset, 'test': test_dset}
+    dataset_dict = {'train_lb': lb_dset, 'train_lb_g': lb_g_train_dset, 'val_lb_g': lb_g_val_dset, 'train_ulb': ulb_dset, 'eval': eval_dset, 'test': test_dset}
     return dataset_dict
 
 

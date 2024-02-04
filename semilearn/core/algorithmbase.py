@@ -6,6 +6,7 @@ import os
 from collections import OrderedDict
 from inspect import signature
 from semilearn.core.smallNN import SmallNN
+import copy
 
 import numpy as np
 import pandas as pd
@@ -390,7 +391,7 @@ class AlgorithmBase:
         val_dict_lb_g = self.extract_feats_labels_g_opt("val_lb_g")
 
         self.print_fn("Training g started---")
-        self.verify_parameters()
+        # self.verify_parameters()
 
         for g_opt_epoch in range(self.args.g_opt_epochs):
             if g_opt_epoch % 10 == 0:
@@ -405,7 +406,7 @@ class AlgorithmBase:
                 if eval_loss < best_loss:
                     print("Found better g")
                     best_loss = eval_loss
-                    self.best_nn = self.small_nn
+                    self.best_nn = copy.deepcopy(self.small_nn)
             else:
                 for feat, labels in zip(train_dict_lb_g['feat'], train_dict_lb_g['labels']):
                     # Crappy way of moving the model and data to GPU depending on input status
@@ -418,11 +419,11 @@ class AlgorithmBase:
                     loss = self.g_opt_loss(logits, labels.to(logits.device).float())
                     # print(loss)
                     self.optimizer.zero_grad()
-                    # retain_graph not True is throwing a runtime error, fix it as this is suboptimal!
+                    # TODO: retain_graph not True is throwing a runtime error, fix it as this is suboptimal!
                     loss.backward(retain_graph=True)
                     self.optimizer.step()
         self.print_fn("Training g done, in end of function---")
-        self.verify_parameters()
+        # self.verify_parameters()
         
 
     def train_step(self, idx_lb, x_lb, y_lb, idx_ulb, x_ulb_w, x_ulb_s):
@@ -451,7 +452,7 @@ class AlgorithmBase:
                 break
 
             self.call_hook("before_train_epoch")
-            if self.args.use_g_opt:
+            if self.args.use_g_opt and (self.it == 0 or (self.it+1) % 10 == 0):
                 # Srinath: Learn this g function for every epoch
                 input_size = 128
                 hidden_size = 20

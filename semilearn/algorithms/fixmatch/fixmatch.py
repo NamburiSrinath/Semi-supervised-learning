@@ -91,6 +91,9 @@ class FixMatch(AlgorithmBase):
             if self.registered_hook("DistAlignHook"):
                 probs_x_ulb_w = self.call_hook("dist_align", "DistAlignHook", probs_x_ulb=probs_x_ulb_w.detach())
             
+            # compute mask
+            mask, max_probs = self.call_hook("masking", "MaskingHook", logits_x_ulb=probs_x_ulb_w, softmax_x_ulb=False)
+
             # Srinath: If the flag is enabled, learn new g and change these probs_x_ulb_w. 
             # Learn this g using the left out validation data
             # self.learn_new_g(x_lb2, self.model) - Future: Use unlabeled data to learn this new g!
@@ -109,9 +112,9 @@ class FixMatch(AlgorithmBase):
                 logits_x_ulb_w = self.best_nn(feats_x_ulb_w)
                 probs_x_g_ulb_w = self.compute_prob(logits_x_ulb_w)
 
-            # compute mask
-            # Srinath: Use g_probs here
-            mask, max_probs = self.call_hook("masking", "MaskingHook", logits_x_ulb=probs_x_g_ulb_w, softmax_x_ulb=False)
+                # compute mask
+                # Srinath: Use g_probs here
+                mask, max_probs = self.call_hook("masking", "MaskingHook", logits_x_ulb=probs_x_g_ulb_w, softmax_x_ulb=False)
 
             # self.print_fn("Weak aug unlabeled probs")
             # self.print_fn(probs_x_ulb_w.shape)
